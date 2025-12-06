@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-multipart
+pydantic
+pymupdf
+fpdf2
+sentence-transformers
+faiss-cpu
+numpy
+openai
+python-jose
+requests
