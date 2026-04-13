@@ -21,20 +21,41 @@ def _get_index_paths(pdf_id: str) -> Tuple[str, str]:
     return index_path, meta_path
 
 
+# Minimum character threshold — pages with fewer chars trigger OCR fallback
+OCR_FALLBACK_THRESHOLD = 50
+
+
 def index_pdf(pdf_id: str, pdf_path: str) -> None:
     """
     Extract text from PDF, chunk it, embed it, and store FAISS index + metadata.
+    If a page has little or no native text, OCR is used as a fallback.
     """
+    # Lazy import — only loaded if OCR is actually needed
+    from ocr_utils import run_ocr_on_page
+
     doc = fitz.open(pdf_path)
 
     chunks: List[str] = []
     metadatas: List[dict] = []
+    ocr_pages = 0
 
     for page_number in range(len(doc)):
         page = doc[page_number]
         text = page.get_text().strip()
-        if not text:
-            continue
+        source = "native"
+
+        # --- OCR Fallback: if native text is missing or too short ---
+        if len(text) < OCR_FALLBACK_THRESHOLD:
+            print(f"  Page {page_number + 1}: native text too short "
+                  f"({len(text)} chars), running OCR fallback...")
+            ocr_text = run_ocr_on_page(pdf_path, page_number)
+            if ocr_text:
+                text = ocr_text
+                source = "ocr"
+                ocr_pages += 1
+            else:
+                print(f"  Page {page_number + 1}: OCR also returned nothing, skipping.")
+                continue
 
         # Naive chunking: split by lines, group to ~400+ characters
         lines = text.split("\n")
@@ -48,6 +69,7 @@ def index_pdf(pdf_id: str, pdf_path: str) -> None:
                 metadatas.append({
                     "page_number": page_number,
                     "text": chunk_text,
+                    "source": source,
                 })
                 buffer = []
 
@@ -57,12 +79,13 @@ def index_pdf(pdf_id: str, pdf_path: str) -> None:
             metadatas.append({
                 "page_number": page_number,
                 "text": chunk_text,
+                "source": source,
             })
 
     doc.close()
 
     if not chunks:
-        print("No text found in PDF for indexing.")
+        print("No text found in PDF for indexing (native + OCR both failed).")
         return
 
     # Create embeddings
@@ -77,7 +100,8 @@ def index_pdf(pdf_id: str, pdf_path: str) -> None:
     with open(meta_path, "wb") as f:
         pickle.dump(metadatas, f)
 
-    print(f"Indexed PDF {pdf_id}: {len(chunks)} chunks")
+    print(f"Indexed PDF {pdf_id}: {len(chunks)} chunks "
+          f"({ocr_pages} pages used OCR fallback)")
 
 
 def answer_question_from_pdf(
